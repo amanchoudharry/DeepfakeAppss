@@ -6,6 +6,7 @@ Replace the mock inference in `predict_deepfake()` with your actual model.
 import base64
 import io
 import json
+import os
 import random
 import time
 from collections import deque
@@ -18,28 +19,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import librosa
-import librosa.display
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-
-# Optional deepfake inference dependencies
+# Keep heavyweight ML dependencies out of the startup path unless explicitly enabled.
+ENABLE_DEEPFAKE_MODEL = os.getenv("ENABLE_DEEPFAKE_MODEL", "false").lower() == "true"
 USE_DEEPFAKE_MODEL = False
-try:
-    import cv2
-    import numpy as np
-    import torch
-    import torch.nn as nn
-    from torchvision import models, transforms
-    USE_DEEPFAKE_MODEL = True
-except ImportError:
-    cv2 = None
-    np = None
-    torch = None
-    nn = None
-    models = None
-    transforms = None
+cv2 = None
+np = None
+torch = None
+nn = None
+models = None
+transforms = None
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 FACE_PROTO = MODEL_DIR / "face_detector" / "deploy.prototxt"
@@ -52,7 +40,7 @@ face_net = None
 preprocess = None
 audio_model = None
 audio_transform = None
-DEVICE = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu") if USE_DEEPFAKE_MODEL else None
+DEVICE = None
 
 app = FastAPI(title="Deepfake Detection API", version="1.0.0")
 
@@ -107,6 +95,31 @@ class FeedbackResponse(BaseModel):
 
 def load_deepfake_model() -> None:
     global deepfake_model, face_net, preprocess, audio_model, audio_transform
+    global USE_DEEPFAKE_MODEL, DEVICE, cv2, np, torch, nn, models, transforms
+
+    if not ENABLE_DEEPFAKE_MODEL:
+        print("[deepfake] Model loading disabled. Set ENABLE_DEEPFAKE_MODEL=true to use real inference.")
+        return
+
+    try:
+        import cv2 as cv2_module
+        import numpy as np_module
+        import torch as torch_module
+        import torch.nn as nn_module
+        from torchvision import models as torchvision_models
+        from torchvision import transforms as torchvision_transforms
+
+        cv2 = cv2_module
+        np = np_module
+        torch = torch_module
+        nn = nn_module
+        models = torchvision_models
+        transforms = torchvision_transforms
+        USE_DEEPFAKE_MODEL = True
+        DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    except ImportError as exc:
+        print("[deepfake] ML dependencies are not installed. Using mock inference.", exc)
+        return
 
     if not USE_DEEPFAKE_MODEL:
         print("[deepfake] Torch/OpenCV dependencies are not installed. Using mock inference.")
@@ -260,8 +273,13 @@ async def health():
 def predict_audio(audio_bytes: bytes) -> dict:
     if USE_DEEPFAKE_MODEL and audio_model is not None:
         try:
-            import io
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import librosa
+            import librosa.display
             import soundfile as sf
+
             y, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050)
         except Exception as e:
             return {"prediction": "real", "confidence": 0.5, "reason": "Audio format unsupported; skipping audio check"}
