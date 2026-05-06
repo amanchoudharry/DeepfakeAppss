@@ -270,6 +270,11 @@ def predict_deepfake(image_bytes: bytes) -> dict:
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "Deepfake Detection API"}
+
 def predict_audio(audio_bytes: bytes) -> dict:
     if USE_DEEPFAKE_MODEL and audio_model is not None:
         try:
@@ -404,4 +409,5 @@ async def get_feedback():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
